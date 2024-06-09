@@ -1,0 +1,194 @@
+package io.hardingadonis.saledock.dao.impl;
+
+import io.hardingadonis.saledock.dao.*;
+import io.hardingadonis.saledock.model.*;
+import io.hardingadonis.saledock.utils.*;
+import java.sql.*;
+import java.util.*;
+import org.hibernate.*;
+import org.hibernate.query.Query;
+import org.json.simple.*;
+
+public class OrderDAOImpl implements IOrderDAO {
+
+    private final SessionFactory sessionFactory;
+
+    private static boolean isDisable = false;
+
+    public OrderDAOImpl() {
+        this.sessionFactory = HibernateUtil.getSessionFactory();
+    }
+
+    @Override
+    public Order save(Order obj) {
+        try (Session session = sessionFactory.openSession()) {
+            session.beginTransaction();
+            Order o = session.merge(obj);
+            session.getTransaction().commit();
+
+            return o;
+        }
+    }
+
+    @Override
+    public Optional<Order> getByID(Integer ID) {
+        try (Session session = sessionFactory.openSession()) {
+            return Optional.ofNullable(session.get(Order.class, ID));
+        }
+    }
+
+    @Override
+    public List<Order> getAll() {
+        try (Session session = sessionFactory.openSession()) {
+            return session.createQuery("FROM Order", Order.class).getResultList();
+        }
+    }
+
+    @Override
+    public Integer count() {
+        Integer count = 0;
+
+        try {
+            Connection conn = Singleton.dbContext.getConnection();
+
+            PreparedStatement smt = conn.prepareStatement("SELECT COUNT(*) FROM `order`");
+
+            ResultSet rs = smt.executeQuery();
+
+            if (rs.next()) {
+                count = rs.getInt(1);
+            }
+
+            Singleton.dbContext.closeConnection(conn);
+        } catch (SQLException ex) {
+            System.err.println(ex.getMessage());
+        }
+
+        return count;
+    }
+
+    @Override
+    public Integer countOrderInProcess() {
+        Integer count = 0;
+
+        try {
+            Connection conn = Singleton.dbContext.getConnection();
+
+            PreparedStatement smt = conn.prepareStatement("SELECT COUNT(*) FROM `order` WHERE `status` IN ('PENDING', 'SHIPPING')");
+
+            ResultSet rs = smt.executeQuery();
+
+            if (rs.next()) {
+                count = rs.getInt(1);
+            }
+
+            Singleton.dbContext.closeConnection(conn);
+        } catch (SQLException ex) {
+            System.err.println(ex.getMessage());
+        }
+
+        return count;
+    }
+
+    @Override
+    public String statisticBySold(Integer duration) {
+        if (!isDisable) {
+            this.disableOnlyFullGroupBy();
+        }
+
+        JSONObject json = new JSONObject();
+
+        try {
+            Connection conn = Singleton.dbContext.getConnection();
+
+            PreparedStatement smt = conn.prepareStatement("SELECT COUNT(*), DATE_FORMAT(SUBSTR(`created_at`, 1, 10), 'Tháng %m năm %Y') FROM `order` WHERE SUBSTR(`created_at`, 1, 10) BETWEEN DATE_SUB(CURDATE(), INTERVAL ? MONTH) AND CURDATE() GROUP BY SUBSTR(`created_at`, 1, 7)");
+            smt.setInt(1, duration);
+
+            ResultSet rs = smt.executeQuery();
+
+            JSONArray labels = new JSONArray();
+            JSONArray dataset = new JSONArray();
+
+            while (rs.next()) {
+                Long data = rs.getLong(1);
+                String label = rs.getString(2);
+
+                labels.add(label);
+                dataset.add(data);
+            }
+
+            json.put("labels", labels);
+            json.put("dataset", dataset);
+
+            Singleton.dbContext.closeConnection(conn);
+        } catch (SQLException ex) {
+            System.err.println(ex.getMessage());
+        }
+
+        return json.toJSONString();
+    }
+
+    @Override
+    public String statisticByStatus(Integer duration) {
+        JSONObject json = new JSONObject();
+
+        try {
+            Connection conn = Singleton.dbContext.getConnection();
+
+            PreparedStatement smt = conn.prepareStatement("SELECT COUNT(*), CASE WHEN `status` = 'PENDING' THEN 'Đang xử lý' WHEN `status` = 'SHIPPING' THEN 'Đang giao hàng' WHEN `status` = 'DONE' THEN 'Đã hoàn thành' WHEN `status` = 'CANCELLED' THEN 'Đã hủy' END FROM `order` WHERE SUBSTR(`created_at`, 1, 10) BETWEEN DATE_SUB(CURDATE(), INTERVAL ? MONTH) AND CURDATE() GROUP BY `status`");
+            smt.setInt(1, duration);
+
+            ResultSet rs = smt.executeQuery();
+
+            JSONArray labels = new JSONArray();
+            JSONArray dataset = new JSONArray();
+
+            while (rs.next()) {
+                Long data = rs.getLong(1);
+                String label = rs.getString(2);
+
+                labels.add(label);
+                dataset.add(data);
+            }
+
+            json.put("labels", labels);
+            json.put("dataset", dataset);
+
+            Singleton.dbContext.closeConnection(conn);
+        } catch (SQLException ex) {
+            System.err.println(ex.getMessage());
+        }
+
+        return json.toJSONString();
+    }
+
+    @Override
+    public List<Order> pagination(Integer offset, Integer limit) {
+        try (Session session = sessionFactory.openSession()) {
+            Query<Order> query = session.createQuery("FROM Order ORDER BY ID DESC", Order.class);
+            query.setFirstResult(offset);
+            query.setMaxResults(limit);
+
+            return query.getResultList();
+        }
+    }
+
+    @Override
+    public Integer totalPages(Integer limit) {
+        return (int) Math.ceil((double) this.count() / limit);
+    }
+
+    private void disableOnlyFullGroupBy() {
+        try {
+            Connection conn = Singleton.dbContext.getConnection();
+
+            PreparedStatement smt = conn.prepareStatement("SET GLOBAL SQL_MODE=(SELECT REPLACE(@@SQL_MODE,'ONLY_FULL_GROUP_BY',''));");
+
+            smt.executeUpdate();
+
+            Singleton.dbContext.closeConnection(conn);
+        } catch (SQLException ex) {
+            System.err.println(ex.getMessage());
+        }
+    }
+}
